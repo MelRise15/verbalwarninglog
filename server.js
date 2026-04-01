@@ -7,8 +7,11 @@ require('dotenv').config();
 const express    = require('express');
 const session    = require('express-session');
 const msal       = require('@azure/msal-node');
+const Anthropic  = require('@anthropic-ai/sdk');
 const Database   = require('better-sqlite3');
 const path       = require('path');
+
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -138,6 +141,39 @@ app.get('/auth/logout', (req, res) => {
 // ─────────────────────────────────────────────────────────────
 app.get('/api/me', requireAuth, (req, res) => {
   res.json(req.session.user);
+});
+
+// ─────────────────────────────────────────────────────────────
+// API — punctuation cleanup via Claude
+// ─────────────────────────────────────────────────────────────
+app.post('/api/punctuate', requireAuth, async (req, res) => {
+  const { text } = req.body;
+  if (!text || !text.trim()) return res.json({ text: text || '' });
+
+  try {
+    const message = await anthropic.messages.create({
+      model:      'claude-haiku-4-5-20251001',
+      max_tokens: 1024,
+      messages: [{
+        role:    'user',
+        content: `You are a transcription editor. Add proper punctuation and capitalization to this dictated text from a workplace verbal warning log. Rules:
+- Do not change, add, or remove any words
+- Add periods, commas, and other punctuation where naturally needed
+- Capitalize the first word of each sentence and proper nouns
+- Return only the corrected text, nothing else
+
+Text to fix:
+${text.trim()}`
+      }]
+    });
+
+    res.json({ text: message.content[0].text.trim() });
+  } catch (err) {
+    console.error('Punctuation API error:', err);
+    // Fall back gracefully — return original text with basic capitalization
+    const fallback = text.trim().charAt(0).toUpperCase() + text.trim().slice(1);
+    res.json({ text: fallback });
+  }
 });
 
 // ─────────────────────────────────────────────────────────────
