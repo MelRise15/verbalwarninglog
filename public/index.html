@@ -416,6 +416,74 @@
       margin-right: 8px;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Admin tab ────────────────────────────────── */
+    .admin-badge {
+      display: inline-block;
+      background: #B81419;
+      color: white;
+      font-size: 8.5px;
+      font-weight: bold;
+      letter-spacing: 0.8px;
+      text-transform: uppercase;
+      padding: 2px 5px;
+      border-radius: 4px;
+      vertical-align: middle;
+      margin-left: 4px;
+      line-height: 1.4;
+    }
+    .admin-card {
+      background: white;
+      border: 1px solid #D1D3D4;
+      border-radius: 8px;
+      padding: 14px 16px;
+      margin-bottom: 11px;
+    }
+    .admin-card .card-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 8px;
+      margin-bottom: 5px;
+    }
+    .admin-card .employee-name { font-size: 16px; font-weight: bold; color: #222222; }
+    .admin-card .badge {
+      background: #B81419;
+      color: white;
+      font-size: 9.5px;
+      font-weight: bold;
+      padding: 3px 8px;
+      border-radius: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .admin-card .card-meta { font-size: 12px; color: #808285; margin-bottom: 8px; line-height: 1.4; }
+    .admin-card .logged-by {
+      font-size: 11px;
+      color: #808285;
+      background: #E6E7E8;
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 10px;
+      margin-bottom: 8px;
+      font-weight: bold;
+    }
+    .admin-card .card-desc {
+      font-size: 14px;
+      color: #444444;
+      line-height: 1.55;
+      border-top: 1px solid #E6E7E8;
+      padding-top: 9px;
+    }
+    .admin-card .card-footer {
+      display: flex;
+      justify-content: flex-end;
+      margin-top: 9px;
+      padding-top: 8px;
+      border-top: 1px solid #E6E7E8;
+    }
   </style>
 </head>
 <body>
@@ -451,9 +519,10 @@
     </div>
   </header>
 
-  <div class="tabs">
+  <div class="tabs" id="tabBar">
     <button class="tab-btn active" onclick="showTab('log', this)">＋ Log Warning</button>
     <button class="tab-btn" onclick="showTab('history', this)">History</button>
+    <!-- Admin tab injected by JS if user is admin -->
   </div>
 
   <!-- LOG TAB -->
@@ -514,6 +583,17 @@
     <div id="historyList"><div class="empty-state"><div class="empty-icon">⏳</div><p>Loading…</p></div></div>
   </div>
 
+  <!-- ADMIN TAB (injected only for admins) -->
+  <div class="page" id="page-admin">
+    <div class="history-controls">
+      <input type="text" id="adminSearchInput" placeholder="Search all warnings…"
+             oninput="loadAdminWarnings()">
+      <button class="icon-btn" onclick="exportAdminWarnings()" title="Export all">⬆️</button>
+    </div>
+    <div class="count-bar" id="adminCountBar"></div>
+    <div id="adminList"><div class="empty-state"><div class="empty-icon">⏳</div><p>Loading…</p></div></div>
+  </div>
+
 </div>
 
 <div class="toast" id="toast"></div>
@@ -552,6 +632,16 @@ function showApp() {
 
   const firstName = (currentUser.name || '').split(' ')[0] || currentUser.email;
   document.getElementById('userNameDisplay').textContent = firstName;
+
+  // Inject admin tab if user has admin rights
+  if (currentUser.isAdmin) {
+    const tabBar = document.getElementById('tabBar');
+    const adminTab = document.createElement('button');
+    adminTab.className = 'tab-btn';
+    adminTab.innerHTML = 'All Warnings <span class="admin-badge">Admin</span>';
+    adminTab.onclick = function() { showTab('admin', this); };
+    tabBar.appendChild(adminTab);
+  }
 
   setDefaultDateTime();
   setupSpeech();
@@ -833,6 +923,98 @@ function copyText(text) {
 }
 
 // ─────────────────────────────────────────────────────────────
+// Admin — all warnings
+// ─────────────────────────────────────────────────────────────
+let adminCache = [];
+
+async function loadAdminWarnings() {
+  const q    = document.getElementById('adminSearchInput').value.trim();
+  const list = document.getElementById('adminList');
+
+  try {
+    const url = '/api/admin/warnings' + (q ? `?q=${encodeURIComponent(q)}` : '');
+    const res = await fetch(url);
+    if (res.status === 403) { list.innerHTML = '<div class="empty-state"><p>Admin access required.</p></div>'; return; }
+    if (!res.ok) { list.innerHTML = '<div class="empty-state"><p>Could not load warnings.</p></div>'; return; }
+    adminCache = await res.json();
+    renderAdminWarnings();
+  } catch {
+    list.innerHTML = '<div class="empty-state"><p>Network error loading warnings.</p></div>';
+  }
+}
+
+function renderAdminWarnings() {
+  const list = document.getElementById('adminList');
+  const q    = (document.getElementById('adminSearchInput').value || '').trim().toLowerCase();
+  const data = q
+    ? adminCache.filter(w =>
+        w.employee_name.toLowerCase().includes(q)   ||
+        w.description.toLowerCase().includes(q)      ||
+        w.category.toLowerCase().includes(q)         ||
+        w.logged_by_name.toLowerCase().includes(q))
+    : adminCache;
+  const n = data.length;
+
+  document.getElementById('adminCountBar').textContent =
+    n === 0 ? 'No warnings on record'
+    : n === 1 ? '1 warning across all managers'
+    : `${n} warnings across all managers`;
+
+  if (n === 0) {
+    list.innerHTML = `<div class="empty-state"><div class="empty-icon">📋</div><p>${q ? 'No results match your search.' : 'No warnings have been logged yet.'}</p></div>`;
+    return;
+  }
+
+  list.innerHTML = data.map(w => `
+    <div class="admin-card">
+      <div class="card-top">
+        <div class="employee-name">${esc(w.employee_name)}</div>
+        <span class="badge">${esc(w.category)}</span>
+      </div>
+      <div class="card-meta">${fmtDate(w.warning_date)} &nbsp;·&nbsp; ${fmtTime(w.warning_time)}</div>
+      <div class="logged-by">Logged by ${esc(w.logged_by_name)}</div>
+      <div class="card-desc">${esc(w.description)}</div>
+      <div class="card-footer">
+        <button class="delete-btn" onclick="deleteAdminWarning(${w.id})" title="Delete">🗑</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function deleteAdminWarning(id) {
+  if (!confirm('Delete this warning? This cannot be undone.')) return;
+  try {
+    const res = await fetch(`/api/warnings/${id}`, { method: 'DELETE' });
+    if (!res.ok) { toast('Could not delete warning.'); return; }
+    adminCache = adminCache.filter(w => w.id !== id);
+    renderAdminWarnings();
+    toast('Warning deleted.');
+  } catch {
+    toast('Network error. Try again.');
+  }
+}
+
+function exportAdminWarnings() {
+  if (!adminCache.length) { toast('No warnings to export.'); return; }
+  const text = adminCache.map(w => [
+    '═══════════════════════════════════════════',
+    'VERBAL WARNING — RISE ARMAMENT',
+    '═══════════════════════════════════════════',
+    `Employee:    ${w.employee_name}`,
+    `Date/Time:   ${fmtDate(w.warning_date)} at ${fmtTime(w.warning_time)}`,
+    `Category:    ${w.category}`,
+    `Description: ${w.description}`,
+    `Logged By:   ${w.logged_by_name} (${w.logged_by_email})`,
+  ].join('\n')).join('\n\n');
+
+  if (navigator.share) {
+    navigator.share({ title: 'All Verbal Warnings — RISE Armament', text }).catch(() => copyText(text));
+  } else {
+    copyText(text);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
 // UI Helpers
 // ─────────────────────────────────────────────────────────────
 function showTab(name, btn) {
@@ -841,6 +1023,7 @@ function showTab(name, btn) {
   document.getElementById('page-' + name).classList.add('active');
   btn.classList.add('active');
   if (name === 'history') loadHistory();
+  if (name === 'admin')   loadAdminWarnings();
 }
 
 function showFormStatus(msg, type) {

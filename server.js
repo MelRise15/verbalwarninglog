@@ -74,11 +74,29 @@ app.use(session({
   }
 }));
 
+// Admin email list — comma-separated in ADMIN_EMAILS env var
+const ADMIN_EMAILS = new Set(
+  (process.env.ADMIN_EMAILS || '')
+    .split(',')
+    .map(e => e.trim().toLowerCase())
+    .filter(Boolean)
+);
+
+function isAdmin(email) {
+  return ADMIN_EMAILS.has(email.toLowerCase());
+}
+
 // Auth guard — returns 401 JSON for API calls, redirects to login for page loads
 function requireAuth(req, res, next) {
   if (req.session.user) return next();
   if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Not authenticated' });
   res.redirect('/auth/login');
+}
+
+// Admin guard
+function requireAdmin(req, res, next) {
+  if (req.session.user && isAdmin(req.session.user.email)) return next();
+  res.status(403).json({ error: 'Admin access required.' });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -115,9 +133,11 @@ app.get('/auth/callback', async (req, res) => {
       redirectUri: process.env.REDIRECT_URI,
     });
 
+    const email = result.account.username.toLowerCase();
     req.session.user = {
-      email: result.account.username.toLowerCase(),
-      name:  result.account.name || result.account.username,
+      email,
+      name:    result.account.name || result.account.username,
+      isAdmin: isAdmin(email),
     };
 
     res.redirect('/');
@@ -235,16 +255,44 @@ app.post('/api/warnings', requireAuth, (req, res) => {
   res.json({ id: info.lastInsertRowid, success: true });
 });
 
-// DELETE — only the owner can delete
+// DELETE — owner can delete their own; admin can delete any
 app.delete('/api/warnings/:id', requireAuth, (req, res) => {
-  const info = db.prepare(`
-    DELETE FROM warnings WHERE id = ? AND logged_by_email = ?
-  `).run(Number(req.params.id), req.session.user.email);
+  const { user } = req.session;
+  const info = isAdmin(user.email)
+    ? db.prepare('DELETE FROM warnings WHERE id = ?').run(Number(req.params.id))
+    : db.prepare('DELETE FROM warnings WHERE id = ? AND logged_by_email = ?').run(Number(req.params.id), user.email);
 
   if (info.changes === 0) {
     return res.status(404).json({ error: 'Warning not found or access denied.' });
   }
   res.json({ success: true });
+});
+
+// ─────────────────────────────────────────────────────────────
+// API — admin: all warnings across all managers
+// ─────────────────────────────────────────────────────────────
+
+// GET all warnings (admin only), with optional search
+app.get('/api/admin/warnings', requireAuth, requireAdmin, (req, res) => {
+  const { q } = req.query;
+  let rows;
+
+  if (q && q.trim()) {
+    const like = `%${q.trim()}%`;
+    rows = db.prepare(`
+      SELECT * FROM warnings
+      WHERE employee_name   LIKE ?
+         OR description     LIKE ?
+         OR category        LIKE ?
+         OR logged_by_name  LIKE ?
+         OR logged_by_email LIKE ?
+      ORDER BY id DESC
+    `).all(like, like, like, like, like);
+  } else {
+    rows = db.prepare('SELECT * FROM warnings ORDER BY id DESC').all();
+  }
+
+  res.json(rows);
 });
 
 // ─────────────────────────────────────────────────────────────
