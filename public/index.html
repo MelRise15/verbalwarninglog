@@ -594,7 +594,7 @@ function setupSpeech() {
     if (accumulated) accumulated += ' ';
     btn.classList.add('listening');
     btn.textContent = '⏹';
-    hint.textContent = 'Listening… Tap ⏹ to stop.';
+    hint.textContent = 'Listening… Say "period", "comma", "question mark" for punctuation. Tap ⏹ to stop.';
     showFormStatus('Listening — speak the warning description clearly.', 'info');
   };
 
@@ -604,8 +604,9 @@ function setupSpeech() {
       if (e.results[i].isFinal) newFinal += e.results[i][0].transcript;
       else interim += e.results[i][0].transcript;
     }
-    if (newFinal) accumulated += newFinal + ' ';
-    document.getElementById('description').value = (accumulated + interim).trim();
+    if (newFinal) accumulated += applyPunctuation(newFinal) + ' ';
+    const display = (accumulated + interim).trim();
+    document.getElementById('description').value = capitalizesentences(display);
   };
 
   recognition.onerror = (e) => {
@@ -621,6 +622,32 @@ function setupSpeech() {
     resetMicUI();
     if (document.getElementById('description').value.trim()) hideFormStatus();
   };
+}
+
+// Convert spoken punctuation words → symbols
+function applyPunctuation(text) {
+  return text
+    .replace(/\bperiod\b/gi,                   '.')
+    .replace(/\bfull stop\b/gi,                '.')
+    .replace(/\bcomma\b/gi,                    ',')
+    .replace(/\bquestion mark\b/gi,            '?')
+    .replace(/\bexclamation (point|mark)\b/gi, '!')
+    .replace(/\bsemicolon\b/gi,                ';')
+    .replace(/\bcolon\b/gi,                    ':')
+    .replace(/\bnew (line|paragraph)\b/gi,     '\n')
+    // Remove stray space before punctuation
+    .replace(/\s+([.,!?;:])/g, '$1')
+    // Ensure single space after punctuation (except newline)
+    .replace(/([.,!?;:])(?=[^\s\n])/g, '$1 ');
+}
+
+// Capitalize first letter and after sentence-ending punctuation
+function capitalizesentences(text) {
+  if (!text) return text;
+  // Capitalize very first character
+  text = text.charAt(0).toUpperCase() + text.slice(1);
+  // Capitalize the first letter after .  !  ?  followed by whitespace
+  return text.replace(/([.!?]\s+)([a-z])/g, (_, punct, letter) => punct + letter.toUpperCase());
 }
 
 function toggleDictation() {
