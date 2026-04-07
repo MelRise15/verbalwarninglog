@@ -1,11 +1,13 @@
 /**
  * RISE Armament — Verbal Warning Log
  * Node.js / Express backend with Microsoft 365 SSO (MSAL) + Supabase
+ * Vercel-compatible: sessions stored in Supabase PostgreSQL
  */
 
 require('dotenv').config();
 const express               = require('express');
 const session               = require('express-session');
+const pgSession             = require('connect-pg-simple')(session);
 const msal                  = require('@azure/msal-node');
 const Anthropic             = require('@anthropic-ai/sdk');
 const { createClient }      = require('@supabase/supabase-js');
@@ -49,6 +51,11 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 app.use(session({
+  store: new pgSession({
+    conString:             process.env.DATABASE_URL,
+    tableName:             'sessions',
+    createTableIfMissing:  true,
+  }),
   secret:            process.env.SESSION_SECRET || 'change-this-in-production',
   resave:            false,
   saveUninitialized: false,
