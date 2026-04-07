@@ -1,39 +1,24 @@
 /**
  * RISE Armament — Verbal Warning Log
- * Node.js / Express backend with Microsoft 365 SSO (MSAL) + SQLite
+ * Node.js / Express backend with Microsoft 365 SSO (MSAL) + Supabase
  */
 
 require('dotenv').config();
-const express    = require('express');
-const session    = require('express-session');
-const msal       = require('@azure/msal-node');
-const Anthropic  = require('@anthropic-ai/sdk');
-const Database   = require('better-sqlite3');
-const path       = require('path');
+const express               = require('express');
+const session               = require('express-session');
+const msal                  = require('@azure/msal-node');
+const Anthropic             = require('@anthropic-ai/sdk');
+const { createClient }      = require('@supabase/supabase-js');
+const path                  = require('path');
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const supabase  = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
-
-// ─────────────────────────────────────────────────────────────
-// Database
-// ─────────────────────────────────────────────────────────────
-const db = new Database(process.env.DB_PATH || path.join(__dirname, 'warnings.db'));
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS warnings (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    employee_name    TEXT    NOT NULL,
-    warning_date     TEXT    NOT NULL,
-    warning_time     TEXT    NOT NULL,
-    category         TEXT    NOT NULL,
-    description      TEXT    NOT NULL,
-    logged_by_email  TEXT    NOT NULL,
-    logged_by_name   TEXT    NOT NULL,
-    created_at       TEXT    NOT NULL
-  )
-`);
 
 // ─────────────────────────────────────────────────────────────
 // MSAL — Microsoft 365 SSO
@@ -74,7 +59,9 @@ app.use(session({
   }
 }));
 
-// Admin email list — comma-separated in ADMIN_EMAILS env var
+// ─────────────────────────────────────────────────────────────
+// Admin helpers
+// ─────────────────────────────────────────────────────────────
 const ADMIN_EMAILS = new Set(
   (process.env.ADMIN_EMAILS || '')
     .split(',')
@@ -86,14 +73,12 @@ function isAdmin(email) {
   return ADMIN_EMAILS.has(email.toLowerCase());
 }
 
-// Auth guard — returns 401 JSON for API calls, redirects to login for page loads
 function requireAuth(req, res, next) {
   if (req.session.user) return next();
   if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Not authenticated' });
   res.redirect('/auth/login');
 }
 
-// Admin guard
 function requireAdmin(req, res, next) {
   if (req.session.user && isAdmin(req.session.user.email)) return next();
   res.status(403).json({ error: 'Admin access required.' });
@@ -103,7 +88,6 @@ function requireAdmin(req, res, next) {
 // Auth routes
 // ─────────────────────────────────────────────────────────────
 
-// Start login — redirect to Microsoft
 app.get('/auth/login', async (req, res) => {
   try {
     const authUrl = await cca.getAuthCodeUrl({
@@ -117,7 +101,6 @@ app.get('/auth/login', async (req, res) => {
   }
 });
 
-// Handle Microsoft callback
 app.get('/auth/callback', async (req, res) => {
   const { code, error, error_description } = req.query;
 
@@ -147,7 +130,6 @@ app.get('/auth/callback', async (req, res) => {
   }
 });
 
-// Logout
 app.get('/auth/logout', (req, res) => {
   req.session.destroy(() => {
     const logoutUrl = `https://login.microsoftonline.com/${process.env.AZURE_TENANT_ID}/oauth2/v2.0/logout`
@@ -190,7 +172,6 @@ ${text.trim()}`
     res.json({ text: message.content[0].text.trim() });
   } catch (err) {
     console.error('Punctuation API error:', err);
-    // Fall back gracefully — return original text with basic capitalization
     const fallback = text.trim().charAt(0).toUpperCase() + text.trim().slice(1);
     res.json({ text: fallback });
   }
@@ -200,32 +181,39 @@ ${text.trim()}`
 // API — warnings (scoped to logged-in user)
 // ─────────────────────────────────────────────────────────────
 
-// GET all warnings for the current user (optionally filter by search query)
-app.get('/api/warnings', requireAuth, (req, res) => {
+// GET warnings for current user
+app.get('/api/warnings', requireAuth, async (req, res) => {
   const { q } = req.query;
-  let rows;
+  const email = req.session.user.email;
 
-  if (q && q.trim()) {
-    const like = `%${q.trim()}%`;
-    rows = db.prepare(`
-      SELECT * FROM warnings
-      WHERE logged_by_email = ?
-        AND (employee_name LIKE ? OR description LIKE ? OR category LIKE ?)
-      ORDER BY id DESC
-    `).all(req.session.user.email, like, like, like);
-  } else {
-    rows = db.prepare(`
-      SELECT * FROM warnings
-      WHERE logged_by_email = ?
-      ORDER BY id DESC
-    `).all(req.session.user.email);
+  try {
+    let query = supabase
+      .from('warnings')
+      .select('*')
+      .eq('logged_by_email', email)
+      .order('id', { ascending: false });
+
+    if (q && q.trim()) {
+      const search = q.trim();
+      query = supabase
+        .from('warnings')
+        .select('*')
+        .eq('logged_by_email', email)
+        .or(`employee_name.ilike.%${search}%,description.ilike.%${search}%,category.ilike.%${search}%`)
+        .order('id', { ascending: false });
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    console.error('GET /api/warnings error:', err);
+    res.status(500).json({ error: 'Failed to load warnings.' });
   }
-
-  res.json(rows);
 });
 
 // POST — create a new warning
-app.post('/api/warnings', requireAuth, (req, res) => {
+app.post('/api/warnings', requireAuth, async (req, res) => {
   const { employeeName, date, time, category, description } = req.body;
 
   if (!employeeName || !employeeName.trim()) {
@@ -235,64 +223,77 @@ app.post('/api/warnings', requireAuth, (req, res) => {
     return res.status(400).json({ error: 'Description is required.' });
   }
 
-  const stmt = db.prepare(`
-    INSERT INTO warnings
-      (employee_name, warning_date, warning_time, category, description, logged_by_email, logged_by_name, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `);
+  try {
+    const { data, error } = await supabase
+      .from('warnings')
+      .insert({
+        employee_name:   employeeName.trim(),
+        warning_date:    date     || new Date().toISOString().split('T')[0],
+        warning_time:    time     || new Date().toTimeString().slice(0, 5),
+        category:        category || 'Other',
+        description:     description.trim(),
+        logged_by_email: req.session.user.email,
+        logged_by_name:  req.session.user.name,
+      })
+      .select()
+      .single();
 
-  const info = stmt.run(
-    employeeName.trim(),
-    date        || new Date().toISOString().split('T')[0],
-    time        || new Date().toTimeString().slice(0, 5),
-    category    || 'Other',
-    description.trim(),
-    req.session.user.email,
-    req.session.user.name,
-    new Date().toISOString()
-  );
-
-  res.json({ id: info.lastInsertRowid, success: true });
+    if (error) throw error;
+    res.json({ id: data.id, success: true });
+  } catch (err) {
+    console.error('POST /api/warnings error:', err);
+    res.status(500).json({ error: 'Failed to save warning.' });
+  }
 });
 
-// DELETE — owner can delete their own; admin can delete any
-app.delete('/api/warnings/:id', requireAuth, (req, res) => {
+// DELETE — owner deletes their own; admin deletes any
+app.delete('/api/warnings/:id', requireAuth, async (req, res) => {
   const { user } = req.session;
-  const info = isAdmin(user.email)
-    ? db.prepare('DELETE FROM warnings WHERE id = ?').run(Number(req.params.id))
-    : db.prepare('DELETE FROM warnings WHERE id = ? AND logged_by_email = ?').run(Number(req.params.id), user.email);
+  const id = Number(req.params.id);
 
-  if (info.changes === 0) {
-    return res.status(404).json({ error: 'Warning not found or access denied.' });
+  try {
+    let query = supabase.from('warnings').delete().eq('id', id);
+    if (!isAdmin(user.email)) query = query.eq('logged_by_email', user.email);
+
+    const { error, count } = await query;
+    if (error) throw error;
+    if (count === 0) return res.status(404).json({ error: 'Warning not found or access denied.' });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('DELETE /api/warnings error:', err);
+    res.status(500).json({ error: 'Failed to delete warning.' });
   }
-  res.json({ success: true });
 });
 
 // ─────────────────────────────────────────────────────────────
 // API — admin: all warnings across all managers
 // ─────────────────────────────────────────────────────────────
 
-// GET all warnings (admin only), with optional search
-app.get('/api/admin/warnings', requireAuth, requireAdmin, (req, res) => {
+app.get('/api/admin/warnings', requireAuth, requireAdmin, async (req, res) => {
   const { q } = req.query;
-  let rows;
 
-  if (q && q.trim()) {
-    const like = `%${q.trim()}%`;
-    rows = db.prepare(`
-      SELECT * FROM warnings
-      WHERE employee_name   LIKE ?
-         OR description     LIKE ?
-         OR category        LIKE ?
-         OR logged_by_name  LIKE ?
-         OR logged_by_email LIKE ?
-      ORDER BY id DESC
-    `).all(like, like, like, like, like);
-  } else {
-    rows = db.prepare('SELECT * FROM warnings ORDER BY id DESC').all();
+  try {
+    let query = supabase
+      .from('warnings')
+      .select('*')
+      .order('id', { ascending: false });
+
+    if (q && q.trim()) {
+      const search = q.trim();
+      query = supabase
+        .from('warnings')
+        .select('*')
+        .or(`employee_name.ilike.%${search}%,description.ilike.%${search}%,category.ilike.%${search}%,logged_by_name.ilike.%${search}%`)
+        .order('id', { ascending: false });
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    console.error('GET /api/admin/warnings error:', err);
+    res.status(500).json({ error: 'Failed to load warnings.' });
   }
-
-  res.json(rows);
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -300,7 +301,6 @@ app.get('/api/admin/warnings', requireAuth, requireAdmin, (req, res) => {
 // ─────────────────────────────────────────────────────────────
 app.use(express.static(path.join(__dirname, 'public')));
 
-// All unmatched routes → the SPA (requires auth for non-login pages)
 app.get('*', requireAuth, (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
