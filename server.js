@@ -6,8 +6,7 @@
 
 require('dotenv').config();
 const express               = require('express');
-const session               = require('express-session');
-const pgSession             = require('connect-pg-simple')(session);
+const cookieSession         = require('cookie-session');
 const msal                  = require('@azure/msal-node');
 const Anthropic             = require('@anthropic-ai/sdk');
 const { createClient }      = require('@supabase/supabase-js');
@@ -50,20 +49,13 @@ const cca = new msal.ConfidentialClientApplication(msalConfig);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-app.use(session({
-  store: new pgSession({
-    conString:             process.env.DATABASE_URL,
-    tableName:             'sessions',
-    createTableIfMissing:  true,
-  }),
-  secret:            process.env.SESSION_SECRET || 'change-this-in-production',
-  resave:            false,
-  saveUninitialized: false,
-  cookie: {
-    secure:   process.env.NODE_ENV === 'production',
-    httpOnly: true,
-    maxAge:   8 * 60 * 60 * 1000  // 8 hours
-  }
+app.use(cookieSession({
+  name:   'rise_session',
+  keys:   [process.env.SESSION_SECRET || 'change-this-in-production'],
+  maxAge: 8 * 60 * 60 * 1000,  // 8 hours
+  secure: process.env.NODE_ENV === 'production',
+  httpOnly: true,
+  sameSite: 'lax',
 }));
 
 // ─────────────────────────────────────────────────────────────
@@ -138,11 +130,10 @@ app.get('/auth/callback', async (req, res) => {
 });
 
 app.get('/auth/logout', (req, res) => {
-  req.session.destroy(() => {
-    const logoutUrl = `https://login.microsoftonline.com/${process.env.AZURE_TENANT_ID}/oauth2/v2.0/logout`
-      + `?post_logout_redirect_uri=${encodeURIComponent(process.env.APP_URL || `http://localhost:${PORT}`)}`;
-    res.redirect(logoutUrl);
-  });
+  req.session = null;
+  const logoutUrl = `https://login.microsoftonline.com/${process.env.AZURE_TENANT_ID}/oauth2/v2.0/logout`
+    + `?post_logout_redirect_uri=${encodeURIComponent(process.env.APP_URL || `http://localhost:${PORT}`)}`;
+  res.redirect(logoutUrl);
 });
 
 // ─────────────────────────────────────────────────────────────
