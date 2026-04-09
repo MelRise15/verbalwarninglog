@@ -68,6 +68,7 @@ const ADMIN_EMAILS = new Set(
     .map(e => e.trim().toLowerCase())
     .filter(Boolean)
 );
+console.log('[ADMIN] ADMIN_EMAILS loaded:', [...ADMIN_EMAILS]);
 
 function isAdmin(email) {
   return ADMIN_EMAILS.has(email.toLowerCase());
@@ -83,6 +84,15 @@ function requireAdmin(req, res, next) {
   if (req.session.user && isAdmin(req.session.user.email)) return next();
   res.status(403).json({ error: 'Admin access required.' });
 }
+
+// Inject live isAdmin into every authenticated request
+function injectAdminStatus(req, res, next) {
+  if (req.session.user) {
+    req.session.user.isAdmin = isAdmin(req.session.user.email);
+  }
+  next();
+}
+app.use(injectAdminStatus);
 
 // ─────────────────────────────────────────────────────────────
 // Auth routes
