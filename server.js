@@ -46,7 +46,7 @@ const cca = new msal.ConfidentialClientApplication(msalConfig);
 // ─────────────────────────────────────────────────────────────
 // Middleware
 // ─────────────────────────────────────────────────────────────
-app.set('trust proxy', 1); // Required for Vercel — trust the HTTPS proxy
+app.set('trust proxy', 1); // Required for Vercel — trust the HTTPS proxy (v2)
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
