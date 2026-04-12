@@ -13,10 +13,14 @@ const { createClient }      = require('@supabase/supabase-js');
 const path                  = require('path');
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-const supabase  = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
+
+// Lazy Supabase init — prevents crash if env vars load after module init
+function getSupabase() {
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) throw new Error(`Supabase env vars missing. URL: ${url ? 'SET' : 'MISSING'}, KEY: ${key ? 'SET' : 'MISSING'}`);
+  return createClient(url, key);
+}
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -211,6 +215,7 @@ app.get('/api/warnings', requireAuth, async (req, res) => {
   const email = req.session.user.email;
 
   try {
+    const supabase = getSupabase();
     let query = supabase
       .from('warnings')
       .select('*')
@@ -248,6 +253,7 @@ app.post('/api/warnings', requireAuth, async (req, res) => {
   }
 
   try {
+    const supabase = getSupabase();
     const { data, error } = await supabase
       .from('warnings')
       .insert({
@@ -276,6 +282,7 @@ app.delete('/api/warnings/:id', requireAuth, async (req, res) => {
   const id = Number(req.params.id);
 
   try {
+    const supabase = getSupabase();
     let query = supabase.from('warnings').delete().eq('id', id);
     if (!isAdmin(user.email)) query = query.eq('logged_by_email', user.email);
 
@@ -297,6 +304,7 @@ app.get('/api/admin/warnings', requireAuth, requireAdmin, async (req, res) => {
   const { q } = req.query;
 
   try {
+    const supabase = getSupabase();
     let query = supabase
       .from('warnings')
       .select('*')
