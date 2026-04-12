@@ -319,3 +319,4 @@ app.listen(PORT, () => {
   console.log(`\n✅  Verbal Warning Log running at http://localhost:${PORT}`);
   console.log(`   Login: http://localhost:${PORT}/auth/login\n`);
 });
+// cache bust Sun Apr 12 12:17:37 CDT 2026
