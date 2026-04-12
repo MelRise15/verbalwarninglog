@@ -95,6 +95,21 @@ function injectAdminStatus(req, res, next) {
 app.use(injectAdminStatus);
 
 // ─────────────────────────────────────────────────────────────
+// Debug route — remove after fixing
+// ─────────────────────────────────────────────────────────────
+app.get('/debug-env', (req, res) => {
+  res.json({
+    SUPABASE_URL: process.env.SUPABASE_URL ? 'SET' : 'MISSING',
+    SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY ? 'SET' : 'MISSING',
+    AZURE_CLIENT_ID: process.env.AZURE_CLIENT_ID ? 'SET' : 'MISSING',
+    AZURE_CLIENT_SECRET: process.env.AZURE_CLIENT_SECRET ? 'SET' : 'MISSING',
+    SESSION_SECRET: process.env.SESSION_SECRET ? 'SET' : 'MISSING',
+    NODE_ENV: process.env.NODE_ENV || 'MISSING',
+    ADMIN_EMAILS: process.env.ADMIN_EMAILS || 'MISSING',
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
 // Auth routes
 // ─────────────────────────────────────────────────────────────
 
